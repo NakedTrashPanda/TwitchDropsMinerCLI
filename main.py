@@ -21,6 +21,7 @@ from version import __version__
 from exceptions import CaptchaRequired
 from utils import lock_file
 from constants import LOGGING_LEVELS, SELF_PATH, FILE_FORMATTER, LOG_PATH, LOCK_PATH
+from tui import TuiLogHandler
 from headless import HeadlessTwitch
 
 if TYPE_CHECKING:
@@ -79,6 +80,9 @@ def run_headless(settings: Settings):
     async def run_client():
         exit_status = 0
         client = HeadlessTwitch(settings)
+        tui_handler = TuiLogHandler(client.gui)
+        tui_handler.setFormatter(logging.Formatter('%(message)s'))
+        logger.addHandler(tui_handler)
         loop = asyncio.get_running_loop()
 
         def signal_handler():

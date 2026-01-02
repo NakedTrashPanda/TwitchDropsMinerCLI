@@ -7,12 +7,13 @@ from typing import TYPE_CHECKING
 from rich.console import Group
 from rich.layout import Layout
 from rich.panel import Panel
-from rich.progress import Progress, BarColumn, TextColumn
+from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
 from rich.table import Table
 from rich.live import Live
 from rich.text import Text
 from rich.align import Align
 from datetime import datetime
+import time
 from prompt_toolkit.input import create_input
 from prompt_toolkit.keys import Keys
 from constants import State
@@ -21,6 +22,19 @@ if TYPE_CHECKING:
     from headless import HeadlessTwitch
 
 logger = logging.getLogger("TwitchDrops")
+
+
+class TuiLogHandler(logging.Handler):
+    def __init__(self, tui_manager: "TuiManager"):
+        super().__init__()
+        self.tui_manager = tui_manager
+
+    def emit(self, record):
+        msg = self.format(record)
+        # This is called from a different thread, so we need to
+        # make sure we're using the TUI's event loop to update the UI.
+        self.tui_manager.set_active_log(msg)
+
 
 class TuiManager:
     def __init__(self, twitch: "HeadlessTwitch"):
@@ -38,8 +52,17 @@ class TuiManager:
         self.input = None
         
         # UI State
-        self.log_messages = deque(maxlen=20)
+        self.log_messages = deque(maxlen=1)
+        self.active_log_message = None
         self.auth_info = None
+
+        # Dancing Cat Animation State
+        self.dancing_cat_frames = [
+            "(^・ω・^ )♪", "( ^・ω・^)/", "(/・ω・^ )",
+            "( ^>ω<^ )✧", "( ^・∀・^ )ノ", "ヽ(^・ω・^)ノ", 
+        ]
+        self.dancing_cat_frame_index = 0
+        self.animation_task = None
         
         # Campaigns View State
         self.campaign_selection_cursor = 0
@@ -82,6 +105,7 @@ class TuiManager:
 
         with self.input.raw_mode():
             loop.add_reader(self.input.fileno(), self.on_input)
+            self.animation_task = asyncio.create_task(self._run_animation_task())
             try:
                 with Live(self.dashboard_layout, screen=True, redirect_stderr=False, refresh_per_second=10) as live:
                     while not self.close_requested:
@@ -101,6 +125,8 @@ class TuiManager:
                             pass
             finally:
                 loop.remove_reader(self.input.fileno())
+                if self.animation_task:
+                    self.animation_task.cancel()
 
     # --- Input Handling ---
 
@@ -235,12 +261,13 @@ class TuiManager:
             Layout(name="right", ratio=2)
         )
         layout["left"].split(
-            Layout(name="prio_list"), 
+            Layout(name="prio_list"),
             Layout(name="status")
         )
         layout["right"].split(
-            Layout(name="progress"), 
-            Layout(name="logs")
+            Layout(name="progress", ratio=1),
+            Layout(name="logs", size=4),
+            Layout(name="mascot", size=3)
         )
         return layout
 
@@ -253,7 +280,7 @@ class TuiManager:
         return layout
 
     # --- UI Panel & Component Builders ---
-    
+
     def get_header(self, title: str) -> Panel:
         grid = Table.grid(expand=True)
         grid.add_column(justify="left", ratio=1)
@@ -275,6 +302,7 @@ class TuiManager:
         layout["status"].update(self.get_status_panel())
         layout["progress"].update(self.get_progress_panel())
         layout["logs"].update(self.get_logs_panel())
+        layout["mascot"].update(self.get_mascot_panel())
 
     def get_dashboard_footer(self) -> Panel:
         return Panel(Text("[C]ampaigns    [Q]uit", justify="center"), style="bold blue")
@@ -284,7 +312,7 @@ class TuiManager:
         games_table = Table(expand=True, show_header=False)
         games_table.add_column("Prio", style="green", width=3)
         games_table.add_column("Farming Game", style="cyan")
-        
+
         if priority_list:
             for i, game_name in enumerate(priority_list):
                 games_table.add_row(f"{i+1}.", game_name)
@@ -294,7 +322,7 @@ class TuiManager:
 
     def get_status_panel(self) -> Panel:
         watching_channel = self.twitch.watching_channel.get_with_default(None)
-        
+
         renderable = None
         if self.auth_info:
             content = (
@@ -312,16 +340,16 @@ class TuiManager:
             renderable = Align.center(Text.from_markup(content), vertical="middle")
 
         return Panel(renderable, title="[bold blue]Status[/bold blue]", border_style="blue")
-    
+
     def get_progress_panel(self) -> Panel:
         active_campaign = self.twitch.get_active_campaign()
         if not active_campaign:
             return Panel(Align.center("No active drop.", vertical="middle"), title="[bold cyan]Drop Progress[/bold cyan]", border_style="cyan")
-        
+
         drop = active_campaign.first_drop
         if not drop or drop.is_claimed:
             return Panel(Align.center("No active drop.", vertical="middle"), title="[bold cyan]Drop Progress[/bold cyan]", border_style="cyan")
-        
+
         progress = Progress(
             TextColumn(drop.name, style="bold blue"),
             BarColumn(),
@@ -330,10 +358,32 @@ class TuiManager:
         )
         progress.add_task("drop", total=drop.required_minutes, completed=drop.current_minutes)
         return Panel(progress, title="[bold cyan]Drop Progress[/bold cyan]", border_style="cyan")
-
+    
     def get_logs_panel(self) -> Panel:
-        log_renderable = Group(*[Text(msg) for msg in self.log_messages])
-        return Panel(log_renderable, title="[bold red]Logs[/bold red]", border_style="red")
+        log_lines = []
+        if self.log_messages:
+            log_lines.append(Text(self.log_messages[0], justify="left"))
+        else:
+            # Add an empty line to maintain height
+            log_lines.append(Text("", justify="left"))
+
+        if self.active_log_message:
+            spinner = Progress(
+                SpinnerColumn(spinner_name="circle", style="bold red"),
+                TextColumn("[progress.description]{task.description}", style="bold red"),
+                transient=True,
+            )
+            spinner.add_task(self.active_log_message, total=None)
+            log_lines.append(spinner)
+        else:
+            # Add an empty line to maintain height
+            log_lines.append(Text("", justify="left"))
+
+        return Panel(Group(*log_lines), title="[bold red]Logs[/bold red]", border_style="red", height=4)
+
+    def get_mascot_panel(self) -> Panel:
+        frame = self.dancing_cat_frames[self.dancing_cat_frame_index]
+        return Panel(Align.center(f"[italic pink]{frame} Working hard~[/]", vertical="middle"), border_style="yellow")
 
     # --- Campaigns View Panels ---
 
@@ -343,7 +393,7 @@ class TuiManager:
             layout["campaigns"].update(self.get_priority_input_panel())
         else:
             layout["campaigns"].update(self.get_campaign_selection_panel())
-    
+
     def get_campaign_selection_header(self) -> Panel:
         return Panel(Text("[D]ashboard    [X] Deselect All    [P]riority    [Space]Select    [Q]uit", justify="center"), style="bold blue")
 
@@ -353,7 +403,7 @@ class TuiManager:
         campaigns_table.add_column("L", style="white", width=2)
         campaigns_table.add_column("Campaign", style="cyan")
         campaigns_table.add_column("Ends At", style="yellow", width=16)
-        
+
         if self.twitch.inventory:
             visible_campaigns = self.twitch.inventory[self.scroll_offset:self.scroll_offset + self.campaign_panel_height]
             for i, campaign in enumerate(visible_campaigns, start=self.scroll_offset):
@@ -364,24 +414,31 @@ class TuiManager:
                     priority_str = f"  [b]{priority}[/b]"
                 except ValueError:
                     priority_str = "  [dim]•[/dim]"
-                
+
                 cursor = ">" if i == self.campaign_selection_cursor else " "
                 ends_at = campaign.ends_at.strftime("%Y-%m-%d %H:%M") if campaign.ends_at else "N/A"
                 linked_str = "🔗" if campaign.linked else " "
                 campaigns_table.add_row(f"{cursor}{priority_str}", linked_str, campaign.game.name, ends_at)
         else:
             campaigns_table.add_row("", "", "No campaigns available.", "")
-            
+
         return Panel(campaigns_table, title="[bold blue]Campaign Management[/bold blue]", border_style="blue")
-    
+
     def get_priority_input_panel(self) -> Panel:
         game_name = self.campaign_for_priority.game.name if self.campaign_for_priority else ""
         text = Text(f"Set priority for '{game_name}': {self.priority_input}", justify="center")
         return Panel(Align.center(text, vertical="middle"), title="[bold yellow]Set Priority (Enter to confirm, Esc to cancel)[/bold yellow]", border_style="yellow")
-
+    
     # --- Compatibility Mock objects ---
     def print(self, message: str):
+        self.active_log_message = None
         self.log_messages.append(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+
+    def set_active_log(self, message: str):
+        self.active_log_message = message
+        # We need to trigger a refresh
+        self.refresh_event.set()
+
     def prevent_close(self):
         pass
     def save(self, force: bool = False):
@@ -399,6 +456,13 @@ class TuiManager:
         return await coro
     def set_games(self, games):
         pass
+
+    async def _run_animation_task(self):
+        while not self.close_requested:
+            self.dancing_cat_frame_index = (self.dancing_cat_frame_index + 1) % len(self.dancing_cat_frames)
+            self.refresh_event.set()
+            await asyncio.sleep(0.8)
+
     def display_drop(self, *args, **kwargs):
         pass
     def clear_drop(self, *args, **kwargs):

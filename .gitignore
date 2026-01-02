@@ -20,6 +20,7 @@ log.txt
 /lock.file
 settings.json
 /lang/English.json
+run_tui_dev.py
 GEMINI.md
 # AppImage
 /AppDir
