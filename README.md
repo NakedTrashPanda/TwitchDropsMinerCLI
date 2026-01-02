@@ -1,6 +1,6 @@
 # Twitch Drops Miner
 
-This application allows you to AFK mine timed Twitch drops, without having to worry about switching channels when the one you were watching goes offline, claiming the drops, or even receiving the stream data itself. This helps you save on bandwidth and hassle.
+This application allows you to AFK mine timed Twitch drops, without having to worry about switching channels when the one you were watching goes offline, claiming the drops, or even receiving the stream data itself. This helps you save on bandwidth and hassle. While providing a Terminal User Interface (TUI) for interaction, its core functionality operates as a headless script, simulating stream watching without requiring actual video stream data.
 
 ### How It Works:
 
@@ -17,21 +17,73 @@ Every several seconds, the application pretends to watch a particular stream by 
 - Login session is saved in a cookies file, so you don't need to login every time.
 - Mining is automatically started as new campaigns appear, and stopped when the last available drops have been mined.
 
-### Usage:
+### Getting Started
 
-- Download and unzip [the latest release](https://github.com/DevilXD/TwitchDropsMiner/releases) - it's recommended to keep it in the folder it comes in.
-- Run it and login/connect the miner to your Twitch account by using the in-app login form.
-- After a successful login, the app should fetch a list of all available campaigns and games you can mine drops for - you can then select and add games of choice to the Priority List available on the Settings tab, and then press on the `Reload` button to start processing. It will fetch a list of all applicable streams it can watch, and start mining right away. You can also manually switch to a different channel as needed.
-- If you wish to keep the miner occupied with mining anything it can, beyond what you've selected via the Priority List, you can use the Priority Mode setting to specify the mining order for the rest of the games.
-- Make sure to link your Twitch account to game accounts on the [campaigns page](https://www.twitch.tv/drops/campaigns), to enable more games to be mined.
+This project is intended to be run from source. It uses a Terminal User Interface (TUI) for interaction.
 
-### Pictures:
+#### Prerequisites
 
-![Main](https://user-images.githubusercontent.com/4180725/164298155-c0880ad7-6423-4419-8d73-f3c053730a1b.png)
-![Inventory](https://user-images.githubusercontent.com/4180725/164298315-81cae0d2-24a4-4822-a056-154fd763c284.png)
-![Settings](https://user-images.githubusercontent.com/4180725/164298391-b13ad40d-3881-436c-8d4c-34e2bbe33a78.png)
+- Python 3.10 or higher.
+- `git` for cloning the repository.
 
-### Notes:
+#### Installation and Running
+
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/NakedTrashPanda/TwitchDropsMinerCLI.git
+    cd TwitchDropsMinerCLI
+    ```
+
+2.  **Set up the environment:**
+    You can either use the provided script to automate the process or set up the environment manually.
+
+    **Using the script (recommended):**
+    ```bash
+    ./setup_env.sh
+    ```
+    This script automatically creates a Python virtual environment in the `env/` directory and installs all required dependencies from `requirements.txt`.
+
+    **Manual Installation:**
+    If you prefer to set it up manually, follow these steps:
+
+    a. **Create a virtual environment:**
+    ```bash
+    python3 -m venv env
+    ```
+    (You can replace `env` with your preferred directory name, e.g., `.venv`)
+
+    b. **Activate the virtual environment:**
+    - On **Linux/macOS/Termux**:
+      ```bash
+      source env/bin/activate
+      ```
+    - On **Windows (Git Bash/PowerShell)**:
+      ```bash
+      source env/Scripts/activate
+      ```
+
+    c. **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+3.  **Run the application:**
+    Ensure your virtual environment is activated if you set it up manually.
+
+    You can use the provided run script which starts the miner with recommended logging settings:
+    ```bash
+    ./run.sh
+    ```
+    Alternatively, you can run the main script directly:
+    ```bash
+    python3 main.py
+    ```
+    The application will start in the terminal, presenting you with the TUI. The first time you run it, you will need to log in to your Twitch account.
+
+#### Configuration
+
+-   **`settings.json`**: This file is auto-generated on the first run and stores your application settings. You can edit games directly or through the TUI.
+-   **`cookies.jar`**: This file stores your Twitch login session.
 
 > [!WARNING]  
 > Due to how Twitch handles the drop progression on their side, watching a stream in the browser (or by any other means) on the same account that is actively being used by the miner, will usually cause the miner to misbehave, reporting false progress and getting stuck mining the current drop.  
@@ -49,25 +101,6 @@ Every several seconds, the application pretends to watch a particular stream by 
 
 > [!NOTE]  
 > The source code requires Python 3.10 or higher to run.
-
-### Notes about the Windows build:
-
-- To achieve a portable-executable format, the application is packaged with PyInstaller into an `EXE`. Some antivirus engines (including Windows Defender) might report the packaged executable as a trojan, because PyInstaller has been used by others to package malicious Python code in the past. These reports can be safely ignored. If you absolutely do not trust the executable, you'll have to install Python yourself and run everything from source.
-- The executable uses the `%TEMP%` directory for temporary runtime storage of files, that don't need to be exposed to the user (like compiled code and translation files). For persistent storage, the directory the executable resides in is used instead.
-- The autostart feature is implemented as a registry entry to the current user's (`HKCU`) autostart key. It is only altered when toggling the respective option. If you relocate the app to a different directory, the autostart feature will stop working, until you toggle the option off and back on again
-
-### Notes about the Linux build:
-
-- The Linux app is built and distributed using two distinct portable-executable formats: [AppImage](https://appimage.org/) and [PyInstaller](https://pyinstaller.org/).
-- There are no major differences between the two formats, but if you're looking for a recommendation, use the AppImage.
-- The Linux app should work out of the box on any modern distribution, as long as it has `glibc>=2.35`, plus a working display server.
-- Every feature of the app is expected to work on Linux just as well as it does on Windows. If you find something that's broken, please [open a new issue](https://github.com/DevilXD/TwitchDropsMiner/issues/new).
-- The size of the Linux app is significantly larger than the Windows app due to the inclusion of the `gtk3` library (and its dependencies), which is required for proper system tray/notifications support.
-- As an alternative to the native Linux app, you can run the Windows app via [Wine](https://www.winehq.org/) instead. It works really well!
-
-### Advanced Usage:
-
-If you'd be interested in running the latest master from source or building your own executable, see the wiki page explaining how to do so: https://github.com/DevilXD/TwitchDropsMiner/wiki/Setting-up-the-environment,-building-and-running
 
 ### Support
 
@@ -87,7 +120,7 @@ If you'd be interested in running the latest master from source or building your
 Twitch Drops Miner (TDM for short) has been designed with a couple of simple goals in mind. These are, specifically:
 
 - Twitch Drops oriented - it's in the name. That's what I made it for.
-- Easy to use for an average person. Includes a nice looking GUI and is packaged as a ready-to-go executable, without requiring an existing Python installation to work.
+- Easy to use for an average person. ~~Includes a nice looking GUI and is packaged as a ready-to-go executable, without requiring an existing Python installation to work.~~
 - Intended as a helper tool that starts together with your PC, runs in the background through out the day, and then closes together with your PC shutting down at the end of the day. If it can run continuously for 24 hours at minimum, and not run into any errors, I'd call that good enough already.
 - Requiring a minimum amount of attention during operation - check it once or twice through out the day to see if everything's fine with it.
 - Underlying service friendly - the amount of interactions done with the Twitch site is kept to the minimum required for reliable operation, at a level achievable by a diligent site user.
@@ -104,7 +137,6 @@ TDM is not intended for/as:
 
 This means that features such as:
 
-- It being possible to run it without a GUI, or with only a console attached.
 - Any form of automatic restart when an error happens.
 - Docker or any other form of remote deployment.
 - Using it with more than one managed account.
@@ -115,6 +147,14 @@ This means that features such as:
 ..., are most likely not going to be a feature, ever. You're welcome to search through the existing issues to comment on your point of view on the relevant matters, where applicable. Otherwise, most of the new issues that go against these goals will be closed and the user will be pointed to this paragraph.
 
 For more context about these goals, please check out these issues: [#161](https://github.com/DevilXD/TwitchDropsMiner/issues/161), [#105](https://github.com/DevilXD/TwitchDropsMiner/issues/105), [#84](https://github.com/DevilXD/TwitchDropsMiner/issues/84)
+
+### Closing Notes: 
+
+Purely edited through the power of GeminiCLI for personal use. I will not be taking any credit for the work put into it. I was considering keeping it private out of respect but with the lack of a headless alternative I think releasing it is understandable.
+
+I likely will not be maintaining it much if at all. My current life situation has me stuck without my PC for now (partially why it was all edited with GeminiCLI).
+
+It was edited with Termux support in mind and nothing else.
 
 ### Credits:
 
@@ -149,7 +189,6 @@ placed past the period character at the end.
 @Eriza-Z - For the entirety of the Indonesian translation.  
 @casungo - For the entirety of the Italian (Italiano) translation.  
 @ShimadaNanaki - For the entirety of the Japanese (日本語) translation.  
-@biroman -  For the entirety of the Norwegian (Norsk) translation.  
 @Patriot99 - For the Polish (Polski) translation and revisions (co-authored with @DevilXD).  
 @zarigata - For the entirety of the Portuguese (Português) translation.  
 @Sergo1217 - For the entirety of the Russian (Русский) translation.  

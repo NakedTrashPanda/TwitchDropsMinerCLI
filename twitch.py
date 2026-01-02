@@ -16,7 +16,6 @@ import aiohttp
 from yarl import URL
 
 from translate import _
-from gui import GUIManager
 from channel import Channel
 from websocket import WebsocketPool
 from inventory import DropsCampaign
@@ -350,6 +349,35 @@ class _AuthState:
     async def _validate(self):
         if not hasattr(self, "session_id"):
             self.session_id = create_nonce(CHARS_HEX_LOWER, 16)
+        
+        if self._twitch.settings.auth_token:
+            logger.info("Using auth_token from settings")
+            self.access_token = self._twitch.settings.auth_token
+            # a quick validation
+            try:
+                async with self._twitch.request(
+                    "GET",
+                    "https://id.twitch.tv/oauth2/validate",
+                    headers={"Authorization": f"OAuth {self.access_token}"}
+                ) as response:
+                    if response.status == 401:
+                        logger.error("Auth token from settings is invalid. Please update it.")
+                        # Maybe I should clear it from settings
+                        self._twitch.settings.auth_token = ""
+                        self._twitch.settings.save(force=True)
+                        raise LoginException("Invalid auth_token in settings")
+                    elif response.status == 200:
+                        validate_response = await response.json()
+                        self.user_id = int(validate_response["user_id"])
+                        logger.info(f"Login successful with auth_token, user ID: {self.user_id}")
+                        self._logged_in.set()
+                        return # Skip the rest of the validation
+            except (RequestException, LoginException):
+                raise
+            except Exception as e:
+                logger.error(f"An unexpected error occurred during auth_token validation: {e}")
+                raise LoginException("Failed to validate auth_token")
+
         if not self._hasattrs("device_id", "access_token", "user_id"):
             session = await self._twitch.get_session()
             jar = cast(aiohttp.CookieJar, session.cookie_jar)
@@ -439,7 +467,7 @@ class Twitch:
         self._session: aiohttp.ClientSession | None = None
         self._auth_state: _AuthState = _AuthState(self)
         # GUI
-        self.gui = GUIManager(self)
+        self._create_gui()
         # Storing and watching channels
         self.channels: OrderedDict[int, Channel] = OrderedDict()
         self.watching_channel: AwaitableValue[Channel] = AwaitableValue()
@@ -449,6 +477,10 @@ class Twitch:
         self.websocket = WebsocketPool(self)
         # Maintenance task
         self._mnt_task: asyncio.Task[None] | None = None
+
+    def _create_gui(self):
+        from gui import GUIManager
+        self.gui = GUIManager(self)
 
     async def get_session(self) -> aiohttp.ClientSession:
         if (session := self._session) is not None:
@@ -486,6 +518,7 @@ class Twitch:
         return self._session
 
     async def shutdown(self) -> None:
+        self.save(force=True)
         start_time = time()
         self.stop_watching()
         if self._watching_task is not None:
@@ -666,18 +699,24 @@ class Twitch:
                         priority.index(c.game.name) if c.game.name in priority else MAX_INT
                     )
                 )
+                logger.info(f"Sorted campaigns: {[c.name for c in sorted_campaigns]}")
                 for campaign in sorted_campaigns:
                     game: Game = campaign.game
+                    logger.info(f"Processing campaign: {campaign.name} ({game.name})")
+                    logger.info(f"Finished: {campaign.finished}")
+                    logger.info(f"Can earn within next hour: {campaign.can_earn_within(next_hour)}")
                     if (
                         game not in self.wanted_games  # isn't already there
                         # and isn't excluded by list or priority mode
                         and game.name not in exclude
                         and (not priority_only or game.name in priority)
                         # and can be progressed within the next hour
+                        and not campaign.finished
                         and campaign.can_earn_within(next_hour)
                     ):
                         # non-excluded games with no priority are placed last, below priority ones
                         self.wanted_games.append(game)
+                logger.info(f"Wanted games: {[g.name for g in self.wanted_games]}")
                 full_cleanup = True
                 self.restart_watching()
                 self.change_state(State.CHANNELS_CLEANUP)
@@ -1465,6 +1504,14 @@ class Twitch:
         campaigns.sort(key=lambda c: c.active, reverse=True)
         campaigns.sort(key=lambda c: c.upcoming and c.starts_at or c.ends_at)
         campaigns.sort(key=lambda c: c.eligible, reverse=True)
+
+        deduplicated_campaigns = []
+        seen_games = set()
+        for campaign in campaigns:
+            if campaign.game.name not in seen_games:
+                deduplicated_campaigns.append(campaign)
+                seen_games.add(campaign.game.name)
+        campaigns = deduplicated_campaigns
 
         self._drops.clear()
         self.gui.inv.clear()

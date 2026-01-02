@@ -10,6 +10,9 @@ __pycache__
 /Twitch Drops Miner
 # Dev files
 /env
+/.venv
+/.direnv
+/.vscode
 /cache
 /*.jar
 log.txt

@@ -11,7 +11,6 @@ import asyncio
 import logging
 import traceback
 import webbrowser
-import tkinter as tk
 from enum import Enum
 from pathlib import Path
 from functools import wraps
@@ -19,11 +18,10 @@ from contextlib import suppress
 from functools import cached_property
 from datetime import datetime, timezone
 from collections import abc, OrderedDict
-from typing import Any, Literal, Callable, Generic, Mapping, TypeVar, ParamSpec, cast
+from typing import Any, Literal, Callable, Generic, Mapping, TypeVar, ParamSpec, cast, TYPE_CHECKING
+from copy import deepcopy
 
 from yarl import URL
-from PIL.ImageTk import PhotoImage
-from PIL import Image as Image_module
 
 from exceptions import ExitRequest, ReloadRequest
 from constants import IS_PACKAGED, JsonType, PriorityMode
@@ -35,31 +33,6 @@ _D = TypeVar("_D")  # default
 _P = ParamSpec("_P")  # params
 _JSON_T = TypeVar("_JSON_T", bound=Mapping[Any, Any])
 logger = logging.getLogger("TwitchDrops")
-
-
-def set_root_icon(root: tk.Tk, image_path: Path | str) -> None:
-    with Image_module.open(image_path) as image:
-        icon_photo = PhotoImage(master=root, image=image)
-    root.iconphoto(True, icon_photo)  # type: ignore[arg-type]
-    # keep a reference to the PhotoImage to avoid the ResourceWarning
-    root._icon_image = icon_photo  # type: ignore[attr-defined]
-
-
-async def first_to_complete(coros: abc.Iterable[abc.Coroutine[Any, Any, _T]]) -> _T:
-    # In Python 3.11, we need to explicitly wrap awaitables
-    tasks = [asyncio.ensure_future(coro) for coro in coros]
-    done: set[asyncio.Task[Any]]
-    pending: set[asyncio.Task[Any]]
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
-    return await next(iter(done))
-
-
-def chunk(to_chunk: abc.Iterable[_T], chunk_length: int) -> abc.Generator[list[_T], None, None]:
-    list_to_chunk = list(to_chunk)
-    for i in range(0, len(list_to_chunk), chunk_length):
-        yield list_to_chunk[i:i + chunk_length]
 
 
 def format_traceback(exc: BaseException, **kwargs: Any) -> str:
@@ -93,73 +66,17 @@ def lock_file(path: Path) -> tuple[bool, io.TextIOWrapper]:
     return True, file
 
 
+def chunk(to_chunk: abc.Iterable[_T], chunk_length: int) -> abc.Generator[list[_T], None, None]:
+    list_to_chunk = list(to_chunk)
+    for i in range(0, len(list_to_chunk), chunk_length):
+        yield list_to_chunk[i:i + chunk_length]
+
+
 def json_minify(data: JsonType | list[JsonType]) -> str:
     """
     Returns minified JSON for payload usage.
     """
     return json.dumps(data, separators=(',', ':'))
-
-
-def timestamp(string: str) -> datetime:
-    try:
-        return datetime.strptime(string, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return datetime.strptime(string, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-
-
-CHARS_ASCII = string.ascii_letters + string.digits
-CHARS_HEX_LOWER = string.digits + "abcdef"
-CHARS_HEX_UPPER = string.digits + "ABCDEF"
-
-
-def create_nonce(chars: str, length: int) -> str:
-    return ''.join(random.choices(chars, k=length))
-
-
-def deduplicate(iterable: abc.Iterable[_T]) -> list[_T]:
-    return list(OrderedDict.fromkeys(iterable).keys())
-
-
-def task_wrapper(
-    afunc: abc.Callable[_P, abc.Coroutine[Any, Any, _T]] | None = None, *, critical: bool = False
-):
-    def decorator(
-        afunc: abc.Callable[_P, abc.Coroutine[Any, Any, _T]]
-    ) -> abc.Callable[_P, abc.Coroutine[Any, Any, _T]]:
-        @wraps(afunc)
-        async def wrapper(*args: _P.args, **kwargs: _P.kwargs):
-            try:
-                await afunc(*args, **kwargs)
-            except (ExitRequest, ReloadRequest):
-                pass
-            except Exception:
-                logger.exception(f"Exception in {afunc.__name__} task")
-                if critical:
-                    # critical task's death should trigger a termination.
-                    # there isn't an easy and sure way to obtain the Twitch instance here,
-                    # but we can improvise finding it
-                    from twitch import Twitch  # cyclic import
-                    probe = args and args[0] or None  # extract from 'self' arg
-                    if isinstance(probe, Twitch):
-                        probe.close()
-                    elif probe is not None:
-                        probe = getattr(probe, "_twitch", None)  # extract from '_twitch' attr
-                        if isinstance(probe, Twitch):
-                            probe.close()
-                raise  # raise up to the wrapping task
-        return wrapper
-    if afunc is None:
-        return decorator
-    return decorator(afunc)
-
-
-def invalidate_cache(instance, *attrnames):
-    """
-    To be used to invalidate `functools.cached_property`.
-    """
-    for name in attrnames:
-        with suppress(AttributeError):
-            delattr(instance, name)
 
 
 def _serialize(obj: Any) -> Any:
@@ -213,6 +130,10 @@ def _deserialize(obj: JsonType) -> Any:
     if "__type" in obj:
         obj_type = obj["__type"]
         if obj_type in SERIALIZE_ENV:
+            if obj_type == "PriorityMode":
+                result = SERIALIZE_ENV[obj_type](obj['data'])
+
+                return result
             return SERIALIZE_ENV[obj_type](obj["data"])
         else:
             return _MISSING
@@ -226,6 +147,11 @@ def merge_json(obj: JsonType, template: Mapping[Any, Any]) -> None:
             # unknown key: overwrite from template
             del obj[k]
         elif type(v) is not type(template[k]):
+            if isinstance(template[k], Enum) and isinstance(v, int):
+                # special case for enums stored as integers
+                if v == template[k].value:
+                    # if the integer value matches the enum value, it's fine, don't overwrite
+                    continue
             # types don't match: overwrite from template
             obj[k] = template[k]
         elif isinstance(v, dict):
@@ -234,7 +160,7 @@ def merge_json(obj: JsonType, template: Mapping[Any, Any]) -> None:
     # ensure the object is not missing any keys
     for k in template.keys():
         if k not in obj:
-            obj[k] = template[k]
+            obj[k] = deepcopy(template[k])
 
 
 def json_load(path: Path, defaults: _JSON_T, *, merge: bool = True) -> _JSON_T:
@@ -248,11 +174,16 @@ def json_load(path: Path, defaults: _JSON_T, *, merge: bool = True) -> _JSON_T:
         combined = defaults_dict
     return cast(_JSON_T, combined)
 
-
 def json_save(path: Path, contents: Mapping[Any, Any], *, sort: bool = False) -> None:
     with open(path, 'w', encoding="utf8") as file:
         json.dump(contents, file, default=_serialize, sort_keys=sort, indent=4)
 
+
+def timestamp(string: str) -> datetime:
+    try:
+        return datetime.strptime(string, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return datetime.strptime(string, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 def webopen(url: URL | str):
     url_str = str(url)
@@ -280,6 +211,58 @@ def webopen(url: URL | str):
         webbrowser.open_new_tab(url_str)
 
 
+CHARS_ASCII = string.ascii_letters + string.digits
+CHARS_HEX_LOWER = string.digits + "abcdef"
+CHARS_HEX_UPPER = string.digits + "ABCDEF"
+
+
+def create_nonce(chars: str, length: int) -> str:
+    return ''.join(random.choices(chars, k=length))
+
+def deduplicate(iterable: abc.Iterable[_T]) -> list[_T]:
+    return list(OrderedDict.fromkeys(iterable).keys())
+
+def task_wrapper(
+    afunc: abc.Callable[_P, abc.Coroutine[Any, Any, _T]] | None = None, *, critical: bool = False
+):
+    def decorator(
+        afunc: abc.Callable[_P, abc.Coroutine[Any, Any, _T]]
+    ) -> abc.Callable[_P, abc.Coroutine[Any, Any, _T]]:
+        @wraps(afunc)
+        async def wrapper(*args: _P.args, **kwargs: _P.kwargs):
+            try:
+                await afunc(*args, **kwargs)
+            except (ExitRequest, ReloadRequest):
+                pass
+            except Exception:
+                logger.exception(f"Exception in {afunc.__name__} task")
+                if critical:
+                    # critical task's death should trigger a termination.
+                    # there isn't an easy and sure way to obtain the Twitch instance here,
+                    # but we can improvise finding it
+                    from twitch import Twitch  # cyclic import
+                    probe = args and args[0] or None  # extract from 'self' arg
+                    if isinstance(probe, Twitch):
+                        probe.close()
+                    elif probe is not None:
+                        probe = getattr(probe, "_twitch", None)  # extract from '_twitch' attr
+                        if isinstance(probe, Twitch):
+                            probe.close()
+                raise  # raise up to the wrapping task
+        return wrapper
+    if afunc is None:
+        return decorator
+    return decorator(afunc)
+
+def invalidate_cache(instance, *attrnames):
+    """
+    To be used to invalidate `functools.cached_property`.
+    """
+    for name in attrnames:
+        with suppress(AttributeError):
+            delattr(instance, name)
+
+
 class ExponentialBackoff:
     def __init__(
         self,
@@ -298,7 +281,8 @@ class ExponentialBackoff:
         self.variance_min: float
         self.variance_max: float
         if isinstance(variance, tuple):
-            self.variance_min, self.variance_max = variance
+            self.variance_min = 1 - variance
+            self.variance_max = 1 + variance
         else:
             self.variance_min = 1 - variance
             self.variance_max = 1 + variance
@@ -329,7 +313,9 @@ class ExponentialBackoff:
 
 
 class RateLimiter:
-    def __init__(self, *, capacity: int, window: int):
+    def __init__(
+        self, *, capacity: int, window: int
+    ):
         self.total: int = 0
         self.concurrent: int = 0
         self.window: int = window

@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 
 class SettingsFile(TypedDict):
+    auth_token: str
     proxy: URL
     language: str
     dark_mode: bool
@@ -26,6 +27,7 @@ class SettingsFile(TypedDict):
 
 
 default_settings: SettingsFile = {
+    "auth_token": "",
     "proxy": URL(),
     "priority": [],
     "exclude": set(),
@@ -50,6 +52,7 @@ class Settings:
     debug_gql: int
     logging_level: int
     # from settings file
+    auth_token: str
     proxy: URL
     language: str
     dark_mode: bool

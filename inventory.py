@@ -68,6 +68,7 @@ class BaseDrop:
         self.ends_at: datetime = timestamp(data["endAt"])
         self.claim_id: str | None = None
         self.is_claimed: bool = False
+        self.claimed_at: datetime | None = None
         if "self" in data:
             self.claim_id = data["self"]["dropInstanceID"]
             self.is_claimed = data["self"]["isClaimed"]
@@ -88,7 +89,11 @@ class BaseDrop:
             and all(self.starts_at <= dt < self.ends_at for dt in dts)
         ):
             self.is_claimed = True
+            if dts:
+                self.claimed_at = dts[0]
         self.precondition_drops: list[str] = [d["id"] for d in (data["preconditionDrops"] or [])]
+        if self.is_claimed:
+            logger.info(f"Drop '{self.name}' from campaign '{self.campaign.name}' ({self.campaign.game.name}) has already been claimed.")
 
     def __repr__(self) -> str:
         if self.is_claimed:
@@ -168,6 +173,7 @@ class BaseDrop:
         result = await self._claim()
         if result:
             self.is_claimed = result
+            self.claimed_at = datetime.now(timezone.utc)
             claim_text = (
                 f"{self.campaign.game.name}\n"
                 f"{self.rewards_text()} "
@@ -230,17 +236,13 @@ class TimedDrop(BaseDrop):
             self.real_current_minutes = self.required_minutes
 
     def __repr__(self) -> str:
-        if self.is_claimed:
-            additional = ", claimed=True"
-        elif self.can_earn():
-            additional = ", can_earn=True"
-        else:
-            additional = ''
-        if 0 < self.current_minutes < self.required_minutes:
-            minutes = f", {self.current_minutes}/{self.required_minutes}"
-        else:
-            minutes = ''
-        return f"Drop({self.rewards_text()}{minutes}{additional})"
+        return (
+            f"TimedDrop(name='{self.name}', "
+            f"is_claimed={self.is_claimed}, "
+            f"current_minutes={self.current_minutes}, "
+            f"required_minutes={self.required_minutes}, "
+            f"can_earn={self.can_earn()})"
+        )
 
     @property
     def current_minutes(self) -> int:
@@ -360,9 +362,20 @@ class DropsCampaign:
             drop_data["id"]: TimedDrop(self, drop_data, claimed_benefits)
             for drop_data in data["timeBasedDrops"]
         }
+        if self.linked:
+            logger.info(f"Campaign '{self.name}' ({self.game.name}) is connected.")
+        else:
+            logger.info(f"Campaign '{self.name}' ({self.game.name}) is not connected.")
 
     def __repr__(self) -> str:
-        return f"Campaign({self.game!s}, {self.name}, {self.claimed_drops}/{self.total_drops})"
+        return (
+            f"DropsCampaign(name='{self.name}', "
+            f"game='{self.game.name}', "
+            f"finished={self.finished}, "
+            f"can_earn={self.can_earn()}, "
+            f"claimed_drops={self.claimed_drops}, "
+            f"total_drops={self.total_drops})"
+        )
 
     @property
     def drops(self) -> abc.Iterable[TimedDrop]:
