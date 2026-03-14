@@ -288,23 +288,69 @@ class Channel:
         SETTINGS_PATTERN: str = (
             r'src="(https://[\w.]+/config/settings\.[0-9a-f]{32}\.js)"'
         )
-        SPADE_PATTERN: str = (
-            r'"beacon_?url": ?"(https://video-edge-[.\w\-/]+\.ts(?:\?allow_stream=true)?)"'
-        )
+        # Updated patterns to match Twitch's current spade URL format
+        # Twitch now uses beacon.twitch.tv/track instead of video-edge URLs
+        SPADE_PATTERNS: list[str] = [
+            r'"beacon_?url": ?"(https://video-edge-[.\w\-/]+\.ts(?:\?allow_stream=true)?)"',
+            r'"spade_url": ?"(https://video-edge-[.\w\-/]+\.ts(?:\?allow_stream=true)?)"',
+            r'"spadeUrl": ?"(https://video-edge-[.\w\-/]+\.ts(?:\?allow_stream=true)?)"',
+            r'"beaconUrl": ?"(https://video-edge-[.\w\-/]+\.ts(?:\?allow_stream=true)?)"',
+            r'"beacon_url":"([^"]+)"',
+            r'"spade_url":"([^"]+)"',
+            r'"spadeUrl":"([^"]+)"',
+            r'beacon_url["\s:]+["\']?([^"\'\s]+video-edge[^"\'\s]+)',
+            r'spade_url["\s:]+["\']?([^"\'\s]+video-edge[^"\'\s]+)',
+            r'(https://video-edge-[.\w\-/]+\.ts[^"\s]*)',
+            r'(https://beacon\.twitch\.tv/track[^"\s]*)',
+            r'"beaconUrl":"([^"]+)"',
+        ]
         async with self._twitch.request("GET", self.url) as response1:
             streamer_html: str = await response1.text(encoding="utf8")
-        match = re.search(SPADE_PATTERN, streamer_html, re.I)
+
+        # Try all spade patterns on the HTML first
+        match = None
+        for pattern in SPADE_PATTERNS:
+            match = re.search(pattern, streamer_html, re.I)
+            if match:
+                break
+
         if not match:
             match = re.search(SETTINGS_PATTERN, streamer_html, re.I)
             if not match:
+                # Debug: log what we received to help diagnose the issue
+                logger.debug(f"Step #1 failed. Page URL: {self.url}")
+                logger.debug(f"HTML length: {len(streamer_html)}")
+                # Search for any video-edge URLs in the HTML
+                fallback_match = re.search(r'(https://[^\s"\'<>]*video-edge[^\s"\'<>]*)', streamer_html, re.I)
+                if fallback_match:
+                    logger.debug(f"Fallback match found: {fallback_match.group(1)}")
+                    return URLType(fallback_match.group(1))
+                # Try to find any beacon/spade related JSON
+                json_match = re.search(r'"(?:beacon|spade)[^"]*":\s*"[^"]*"', streamer_html, re.I)
+                if json_match:
+                    logger.debug(f"JSON-like match: {json_match.group()}")
                 raise MinerException("Error while spade_url extraction: step #1")
             streamer_settings = match.group(1)
             async with self._twitch.request("GET", streamer_settings) as response2:
                 settings_js: str = await response2.text(encoding="utf8")
-            match = re.search(SPADE_PATTERN, settings_js, re.I)
+            # Try all spade patterns on the JS file
+            for pattern in SPADE_PATTERNS:
+                match = re.search(pattern, settings_js, re.I)
+                if match:
+                    break
             if not match:
+                # Debug: log what we received to help diagnose the issue
+                logger.debug(f"Step #2 failed. Settings URL: {streamer_settings}")
+                logger.debug(f"JS length: {len(settings_js)}")
+                # Search for any video-edge URLs in the JS
+                fallback_match = re.search(r'(https://[^\s"\'<>]*video-edge[^\s"\'<>]*)', settings_js, re.I)
+                if fallback_match:
+                    logger.debug(f"Fallback match found: {fallback_match.group(1)}")
+                    return URLType(fallback_match.group(1))
                 raise MinerException("Error while spade_url extraction: step #2")
-        return URLType(match.group(1))
+        spade_url = match.group(1)
+        logger.debug(f"Spade URL extracted: {spade_url}")
+        return URLType(spade_url)
 
     def _check_drops_enabled(self, available_drops: list[JsonType]) -> bool:
         return any(

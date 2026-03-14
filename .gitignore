@@ -22,9 +22,12 @@ settings.json
 /lang/English.json
 run_tui_dev.py
 GEMINI.md
+QWEN.md
 # AppImage
 /AppDir
 /appimage-builder
 /appimage-build
 /*.AppImage
 /*.AppImage.zsync
+
+ntfy_notification.py

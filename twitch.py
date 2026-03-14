@@ -466,6 +466,13 @@ class Twitch:
         self._client_type: ClientInfo = ClientType.ANDROID_APP
         self._session: aiohttp.ClientSession | None = None
         self._auth_state: _AuthState = _AuthState(self)
+        # Initialize ntfy notification system
+        from ntfy_notification import NtfyNotification
+        self.ntfy = NtfyNotification(
+            topic=getattr(settings, 'ntfy_topic', ''),
+            server=getattr(settings, 'ntfy_server', 'https://ntfy.sh'),
+            enabled=getattr(settings, 'ntfy_enabled', False)
+        )
         # GUI
         self._create_gui()
         # Storing and watching channels
@@ -659,13 +666,15 @@ class Twitch:
                 if self.settings.dump:
                     self.gui.close()
                     continue
-                self.gui.tray.change_icon("idle")
+                # Ntfy doesn't have status icons, so we can skip this
+                pass
                 self.gui.status.update(_("gui", "status", "idle"))
                 self.stop_watching()
                 # clear the flag and wait until it's set again
                 self._state_change.clear()
             elif self._state is State.INVENTORY_FETCH:
-                self.gui.tray.change_icon("maint")
+                # Ntfy doesn't have status icons, so we can skip this
+                pass
                 # ensure the websocket is running
                 await self.websocket.start()
                 await self.fetch_inventory()
@@ -906,7 +915,8 @@ class Twitch:
                     self.change_state(State.IDLE)
                 del new_watching, selected_channel, watching_channel
             elif self._state is State.EXIT:
-                self.gui.tray.change_icon("pickaxe")
+                # Ntfy doesn't have status icons, so we can skip this
+                pass
                 self.gui.status.update(_("gui", "status", "exiting"))
                 # we've been requested to exit the application
                 break
@@ -1056,18 +1066,33 @@ class Twitch:
         )
 
     def watch(self, channel: Channel, *, update_status: bool = True):
-        self.gui.tray.change_icon("active")
+        # Ntfy doesn't have status icons, so we can skip this
+        pass
         self.gui.channels.set_watching(channel)
         self.watching_channel.set(channel)
         if update_status:
             status_text = _("status", "watching").format(channel=channel.name)
             self.print(status_text)
             self.gui.status.update(status_text)
+            # Send ntfy notification for status change
+            asyncio.create_task(self.ntfy.send(
+                message=f"Now watching {channel.name}",
+                title="Status Change",
+                priority="default",
+                tags=["eyes"]
+            ))
 
     def stop_watching(self):
         self.gui.clear_drop()
         self.watching_channel.clear()
         self.gui.channels.clear_watching()
+        # Send ntfy notification for status change
+        asyncio.create_task(self.ntfy.send(
+            message="Stopped watching",
+            title="Status Change",
+            priority="default",
+            tags=["stop_sign"]
+        ))
 
     def restart_watching(self):
         self.gui.progress.stop_timer()

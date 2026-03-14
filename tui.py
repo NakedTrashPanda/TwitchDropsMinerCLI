@@ -72,6 +72,10 @@ class TuiManager:
         # Priority Input State
         self.priority_input = ""
         self.campaign_for_priority = None
+
+        # Priority List Scrolling State
+        self.prio_scroll_offset = 0
+        self.prio_max_display = 10  # Maximum number of items to display at once
         
         # Layouts
         self.dashboard_layout = self.make_dashboard_layout()
@@ -79,7 +83,7 @@ class TuiManager:
 
         # Mock objects for compatibility
         self.login = self.MockLogin(self)
-        self.tray = self.MockTray()
+        # Note: tray functionality removed, replaced with ntfy notifications
         self.status = self.MockStatus()
         self.channels = self.MockChannels()
         self.progress = self.MockProgress()
@@ -151,6 +155,14 @@ class TuiManager:
             self.close()
         elif key == 'c':
             self.show_campaigns_view()
+        elif key == 'up':
+            self.scroll_priority_list(-1)
+        elif key == 'down':
+            self.scroll_priority_list(1)
+        elif key == 'pageup':
+            self.scroll_priority_list(-self.prio_max_display)
+        elif key == 'pagedown':
+            self.scroll_priority_list(self.prio_max_display)
 
     def handle_campaigns_input(self, key: str):
         if key in ('q', 'd', 'c-c'):
@@ -163,6 +175,20 @@ class TuiManager:
             self.toggle_campaign_selection()
         elif key == 'x':
             self.deselect_all_campaigns()
+        elif key == 'p':
+            self.enter_set_priority_mode()
+
+    def scroll_priority_list(self, direction: int):
+        """Scroll the priority list by the given direction (-1 for up, 1 for down, etc.)"""
+        priority_list = self.twitch.settings.priority
+        if len(priority_list) <= self.prio_max_display:
+            # No need to scroll if list is shorter than max display
+            return
+
+        new_offset = self.prio_scroll_offset + direction
+        # Ensure offset stays within bounds (last possible offset to still show items)
+        max_offset = max(0, len(priority_list) - self.prio_max_display)
+        self.prio_scroll_offset = max(0, min(new_offset, max_offset))
 
     def handle_priority_input(self, key: str):
         if key.isnumeric():
@@ -216,6 +242,9 @@ class TuiManager:
                 self.twitch.settings.priority.remove(game_name)
             else:
                 self.twitch.settings.priority.append(game_name)
+            # Save settings and restart watching to apply changes
+            self.twitch.settings.save()
+            self.twitch.restart_watching()
     
     def enter_set_priority_mode(self):
         if self.twitch.inventory and len(self.twitch.inventory) > self.campaign_selection_cursor:
@@ -232,20 +261,28 @@ class TuiManager:
             if self.priority_input:
                 new_prio = int(self.priority_input)
                 game_name = self.campaign_for_priority.game.name
-                
+
                 if game_name in self.twitch.settings.priority:
                     self.twitch.settings.priority.remove(game_name)
-                
+
                 self.twitch.settings.priority.insert(new_prio - 1, game_name)
                 self.twitch.settings.save()
         except (ValueError, IndexError):
             pass
         finally:
             self.cancel_set_priority()
+            # Restart watching to apply the new priority settings
+            self.twitch.restart_watching()
+
+    def cancel_set_priority(self):
+        self.sub_view_mode = None
+        self.priority_input = ""
+        self.campaign_for_priority = None
 
     def deselect_all_campaigns(self):
         self.twitch.settings.priority = []
         self.twitch.settings.save()
+        self.twitch.restart_watching()
 
     # --- Layout Definitions ---
 
@@ -256,17 +293,24 @@ class TuiManager:
             Layout(ratio=1, name="main"),
             Layout(name="footer", size=4)
         )
-        layout["main"].split_row(
+        # Split main into upper section and full-width priority list at the bottom
+        layout["main"].split(
+            Layout(name="upper_part", ratio=1),
+            Layout(name="prio_list", size=8)  # Full-width priority list at bottom, smaller size
+        )
+        # Split upper part into left and right sections
+        layout["upper_part"].split_row(
             Layout(name="left", ratio=1),
             Layout(name="right", ratio=2)
         )
+        # Just put status panel in the left side (where priority list was originally)
         layout["left"].split(
-            Layout(name="prio_list"),
             Layout(name="status")
         )
+        # Right side: make progress panel larger
         layout["right"].split(
-            Layout(name="progress", ratio=1),
-            Layout(name="logs", size=4),
+            Layout(name="progress", size=4),
+            Layout(name="logs", size=6),
             Layout(name="mascot", size=3)
         )
         return layout
@@ -291,7 +335,8 @@ class TuiManager:
             f"[bold green]{title}[/bold green]",
             datetime.now().ctime(),
         )
-        return Panel(grid, style="bold magenta")
+        header_color = getattr(self.twitch.settings, 'ui_colors', {}).get("header", "bold magenta")
+        return Panel(grid, style=header_color)
 
     # --- Dashboard View Panels ---
 
@@ -305,72 +350,119 @@ class TuiManager:
         layout["mascot"].update(self.get_mascot_panel())
 
     def get_dashboard_footer(self) -> Panel:
-        return Panel(Text("[C]ampaigns    [Q]uit", justify="center"), style="bold blue")
+        footer_color = getattr(self.twitch.settings, 'ui_colors', {}).get("footer", "bold blue")
+        return Panel(Text("[C]ampaigns    [↑↓ PgUp/PgDn] Scroll    [Q]uit", justify="center"), style=footer_color)
 
     def get_prio_list_panel(self) -> Panel:
         priority_list = self.twitch.settings.priority
+        ui_colors = getattr(self.twitch.settings, 'ui_colors', {})
+        priority_panel_color = ui_colors.get("priority_panel", "green")
+        priority_number_color = ui_colors.get("priority_number", "green")
+        farming_game_color = ui_colors.get("farming_game", "cyan")
+        scroll_indicator_color = ui_colors.get("scroll_indicator", "dim")
+
         games_table = Table(expand=True, show_header=False)
-        games_table.add_column("Prio", style="green", width=3)
-        games_table.add_column("Farming Game", style="cyan")
+        games_table.add_column("Prio", style=priority_number_color, width=3)
+        games_table.add_column("Status", style="bold", width=2)  # For status icons
+        games_table.add_column("Farming Game", style=farming_game_color)
 
         if priority_list:
-            for i, game_name in enumerate(priority_list):
-                games_table.add_row(f"{i+1}.", game_name)
+            # Determine visible range
+            start_idx = self.prio_scroll_offset
+            end_idx = min(start_idx + self.prio_max_display, len(priority_list))
+            visible_items = priority_list[start_idx:end_idx]
+
+            for i, game_name in enumerate(visible_items, start=start_idx):
+                row_num = i + 1
+
+                # Determine status icon based on whether the game is currently being farmed
+                status_icon = "○"  # Default: not currently active
+                if self.twitch.watching_channel.get_with_default(None):
+                    watching_game = self.twitch.watching_channel.get_with_default(None).game
+                    if watching_game and watching_game.name == game_name:
+                        status_icon = "●"  # Active: currently being watched
+
+                games_table.add_row(f"{row_num}.", status_icon, game_name)
+
+            # Add scroll indicator if there are more items
+            if len(priority_list) > self.prio_max_display:
+                # Add empty rows to fill the space and show scroll info at bottom
+                remaining_rows = self.prio_max_display - len(visible_items)
+                for _ in range(remaining_rows - 1):
+                    games_table.add_row("", "", "")
+                scroll_info = f"{start_idx + 1}-{end_idx}/{len(priority_list)}"
+                games_table.add_row("", "", f"[{scroll_indicator_color}]{scroll_info}[/{scroll_indicator_color}]")
         else:
-            games_table.add_row("", "No games prioritized.")
-        return Panel(games_table, title="[bold green]Farming Priority[/bold green]", border_style="green")
+            games_table.add_row("", "", "No games prioritized.")
+
+        return Panel(games_table, title=f"[bold {priority_panel_color}]Farming Priority[/bold {priority_panel_color}]", border_style=priority_panel_color)
 
     def get_status_panel(self) -> Panel:
         watching_channel = self.twitch.watching_channel.get_with_default(None)
+        ui_colors = getattr(self.twitch.settings, 'ui_colors', {})
+        status_panel_color = ui_colors.get("status_panel", "blue")
+        status_text_color = ui_colors.get("status_text", "magenta")
 
         renderable = None
         if self.auth_info:
             content = (
                 f"Go to: [bold cyan]{self.auth_info['uri']}[/bold cyan]\n"
-                f"Enter code: [bold magenta]{self.auth_info['code']}[/bold magenta]"
+                f"Enter code: [bold {status_text_color}]{self.auth_info['code']}[/bold {status_text_color}]"
             )
             renderable = Text.from_markup(content)  # Left-aligned by default
         else:
             content = ""
             if watching_channel and watching_channel.online:
                 content += f"[b]Watching:[/b] [cyan]{watching_channel.name}[/cyan]\n"
-                content += f"[b]Game:[/b] [magenta]{watching_channel.game.name if watching_channel.game else 'N/A'}[/magenta]"
+                content += f"[b]Game:[/b] [{status_text_color}]{watching_channel.game.name if watching_channel.game else 'N/A'}[/{status_text_color}]"
             else:
                 content = "Not watching any channel."
             renderable = Align.center(Text.from_markup(content), vertical="middle")
 
-        return Panel(renderable, title="[bold blue]Status[/bold blue]", border_style="blue")
+        return Panel(renderable, title=f"[bold {status_panel_color}]Status[/bold {status_panel_color}]", border_style=status_panel_color)
 
     def get_progress_panel(self) -> Panel:
+        ui_colors = getattr(self.twitch.settings, 'ui_colors', {})
+        progress_panel_color = ui_colors.get("progress_panel", "cyan")
+
         active_campaign = self.twitch.get_active_campaign()
         if not active_campaign:
-            return Panel(Align.center("No active drop.", vertical="middle"), title="[bold cyan]Drop Progress[/bold cyan]", border_style="cyan")
+            return Panel(Align.center("No active drop.", vertical="middle"), title=f"[bold {progress_panel_color}]Drop Progress[/bold {progress_panel_color}]", border_style=progress_panel_color)
 
         drop = active_campaign.first_drop
         if not drop or drop.is_claimed:
-            return Panel(Align.center("No active drop.", vertical="middle"), title="[bold cyan]Drop Progress[/bold cyan]", border_style="cyan")
+            return Panel(Align.center("No active drop.", vertical="middle"), title=f"[bold {progress_panel_color}]Drop Progress[/bold {progress_panel_color}]", border_style=progress_panel_color)
+
+        # Truncate the drop name if it's too long to prevent overflow
+        drop_name = drop.name
+        if len(drop_name) > 30:  # Limit the name to 30 characters
+            drop_name = drop_name[:27] + "..."
 
         progress = Progress(
-            TextColumn(drop.name, style="bold blue"),
+            TextColumn(drop_name, style=f"bold {progress_panel_color}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TextColumn("{task.completed}/{task.total} min"),
         )
         progress.add_task("drop", total=drop.required_minutes, completed=drop.current_minutes)
-        return Panel(progress, title="[bold cyan]Drop Progress[/bold cyan]", border_style="cyan")
+        return Panel(progress, title=f"[bold {progress_panel_color}]Drop Progress[/bold {progress_panel_color}]", border_style=progress_panel_color)
     
     def get_logs_panel(self) -> Panel:
+        ui_colors = getattr(self.twitch.settings, 'ui_colors', {})
+        logs_panel_color = ui_colors.get("logs_panel", "red")
+        log_text_color = ui_colors.get("log_text", "default")
+
         log_lines = []
         if self.log_messages:
-            log_lines.append(Text(self.log_messages[0], justify="left"))
+            log_lines.append(Text(self.log_messages[0], justify="left", style=log_text_color))
         else:
             # Add an empty line to maintain height
             log_lines.append(Text("", justify="left"))
 
         if self.active_log_message:
             spinner = Progress(
-                SpinnerColumn(spinner_name="circle", style="bold red"),
-                TextColumn("[progress.description]{task.description}", style="bold red"),
+                SpinnerColumn(spinner_name="circle", style=f"bold {logs_panel_color}"),
+                TextColumn("[progress.description]{task.description}", style=f"bold {logs_panel_color}"),
                 transient=True,
             )
             spinner.add_task(self.active_log_message, total=None)
@@ -379,11 +471,15 @@ class TuiManager:
             # Add an empty line to maintain height
             log_lines.append(Text("", justify="left"))
 
-        return Panel(Group(*log_lines), title="[bold red]Logs[/bold red]", border_style="red", height=4)
+        return Panel(Group(*log_lines), title=f"[bold {logs_panel_color}]Logs[/bold {logs_panel_color}]", border_style=logs_panel_color)
 
     def get_mascot_panel(self) -> Panel:
+        ui_colors = getattr(self.twitch.settings, 'ui_colors', {})
+        mascot_panel_color = ui_colors.get("mascot_panel", "yellow")
+        mascot_text_color = ui_colors.get("mascot_text", "pink")
+
         frame = self.dancing_cat_frames[self.dancing_cat_frame_index]
-        return Panel(Align.center(f"[italic pink]{frame} Working hard~[/]", vertical="middle"), border_style="yellow")
+        return Panel(Align.center(f"[italic {mascot_text_color}]{frame} Working hard~[/]", vertical="middle"), border_style=mascot_panel_color)
 
     # --- Campaigns View Panels ---
 
@@ -485,11 +581,12 @@ class TuiManager:
             self.tui_manager.auth_info = {"uri": verification_uri, "code": user_code}
         def clear(self, *args, **kwargs):
             self.tui_manager.auth_info = None
-    class MockTray:
-        def change_icon(self, icon: str):
-            pass
-        def notify(self, *args, **kwargs):
-            pass
+    # Tray functionality removed, replaced with ntfy notifications
+    # class MockTray:
+    #     def change_icon(self, icon: str):
+    #         pass
+    #     def notify(self, *args, **kwargs):
+    #         pass
     class MockStatus:
         def update(self, message: str):
             logger.info(message)

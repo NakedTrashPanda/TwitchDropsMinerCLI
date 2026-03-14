@@ -184,7 +184,13 @@ class BaseDrop:
             self._twitch.print(
                 _("status", "claimed_drop").format(drop=claim_text.replace('\n', ' '))
             )
-            self._twitch.gui.tray.notify(claim_text, _("gui", "tray", "notification_title"))
+            # Send ntfy notification instead of tray notification
+            await self._twitch.ntfy.send(
+                message=claim_text,
+                title=_("gui", "tray", "notification_title"),
+                priority="high",
+                tags=["package", "tada"]
+            )
         else:
             logger.error(f"Drop claim has potentially failed! Drop ID: {self.id}")
         return result
@@ -336,7 +342,26 @@ class TimedDrop(BaseDrop):
             delta = -self.real_current_minutes
         elif self.real_current_minutes + delta > self.required_minutes:
             delta = self.required_minutes - self.real_current_minutes
+
+        # Calculate percentage before updating
+        old_percentage = (self.real_current_minutes / self.required_minutes) * 100 if self.required_minutes > 0 else 0
+        new_percentage = ((self.real_current_minutes + delta) / self.required_minutes) * 100 if self.required_minutes > 0 else 0
+
+        # Check for milestone thresholds
+        old_milestone = int(old_percentage // 25)  # Every 25% threshold
+        new_milestone = int(new_percentage // 25)
+
         self.campaign._update_real_minutes(delta)
+
+        # Send notification if crossed a milestone threshold
+        if new_milestone > old_milestone:
+            milestone_percent = new_milestone * 25
+            asyncio.create_task(self._twitch.ntfy.send(
+                message=f"{self.name} ({self.campaign.game.name}): {milestone_percent}% complete",
+                title="Progress Milestone",
+                priority="default",
+                tags=["chart_increasing"]
+            ))
 
 
 class DropsCampaign:

@@ -18,12 +18,14 @@ class SettingsFile(TypedDict):
     dark_mode: bool
     exclude: set[str]
     priority: list[str]
-    autostart_tray: bool
     connection_quality: int
-    tray_notifications: bool
+    ntfy_topic: str
+    ntfy_server: str
+    ntfy_enabled: bool
     enable_badges_emotes: bool
     available_drops_check: bool
     priority_mode: PriorityMode
+    ui_colors: dict[str, str]  # Custom UI colors mapping
 
 
 default_settings: SettingsFile = {
@@ -32,13 +34,31 @@ default_settings: SettingsFile = {
     "priority": [],
     "exclude": set(),
     "dark_mode": False,
-    "autostart_tray": False,
     "connection_quality": 1,
     "language": DEFAULT_LANG,
-    "tray_notifications": True,
+    "ntfy_topic": "",
+    "ntfy_server": "https://ntfy.sh",
+    "ntfy_enabled": False,
     "enable_badges_emotes": False,
     "available_drops_check": False,
     "priority_mode": PriorityMode.PRIORITY_ONLY,
+    "ui_colors": {
+        "header": "bold magenta",
+        "footer": "bold blue",
+        "priority_panel": "green",
+        "status_panel": "blue",
+        "progress_panel": "cyan",
+        "logs_panel": "red",
+        "mascot_panel": "yellow",
+        "priority_number": "green",
+        "farming_game": "cyan",
+        "status_text": "magenta",
+        "log_text": "default",
+        "mascot_text": "pink",
+        "scroll_indicator": "dim",
+        "status_active": "bold green",
+        "status_inactive": "bold red"
+    },
 }
 
 
@@ -58,12 +78,14 @@ class Settings:
     dark_mode: bool
     exclude: set[str]
     priority: list[str]
-    autostart_tray: bool
     connection_quality: int
-    tray_notifications: bool
+    ntfy_topic: str
+    ntfy_server: str
+    ntfy_enabled: bool
     enable_badges_emotes: bool
     available_drops_check: bool
     priority_mode: PriorityMode
+    ui_colors: dict[str, str]
 
     PASSTHROUGH = ("_settings", "_args", "_altered")
 
