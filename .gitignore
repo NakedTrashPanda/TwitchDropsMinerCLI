@@ -1,0 +1,33 @@
+# Cache files
+__pycache__
+.mypy_cache
+# Build and dist files
+/build
+/dist
+/*.exe
+/*.zip
+/*.tmp
+/Twitch Drops Miner
+# Dev files
+/.env
+/.venv
+/.direnv
+/.vscode
+/cache
+/*.jar
+log.txt
+/dump.dat
+/lock.file
+settings.json
+/lang/English.json
+run_tui_dev.py
+GEMINI.md
+QWEN.md
+# AppImage
+/AppDir
+/appimage-builder
+/appimage-build
+/*.AppImage
+/*.AppImage.zsync
+
+ntfy_notification.py

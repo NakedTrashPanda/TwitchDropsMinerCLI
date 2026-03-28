@@ -1,0 +1,4 @@
+aiohttp>=3.9,<4.0
+truststore
+rich
+prompt_toolkit
