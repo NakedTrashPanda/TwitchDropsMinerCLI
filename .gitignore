@@ -29,5 +29,3 @@ QWEN.md
 /appimage-build
 /*.AppImage
 /*.AppImage.zsync
-
-ntfy_notification.py
